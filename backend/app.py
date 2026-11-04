@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
 from sqlalchemy import inspect
@@ -9,6 +10,7 @@ from backend.routes.usuarios import usuarios_bp
 from backend.routes.regionais import regionais_bp
 from backend.routes.empreendimentos import empreendimentos_bp
 from backend.routes.atividades import atividades_bp
+from backend.routes.perfis_atividades import perfis_atividades_bp
 from backend.routes.rotinas import rotinas_bp, reconciliar_semanas_mes_atual
 from backend.routes.notificacoes import notificacoes_bp
 
@@ -70,6 +72,7 @@ def create_app():
     app.register_blueprint(regionais_bp, url_prefix='/api/regionais')
     app.register_blueprint(empreendimentos_bp, url_prefix='/api/empreendimentos')
     app.register_blueprint(atividades_bp, url_prefix='/api/atividades')
+    app.register_blueprint(perfis_atividades_bp, url_prefix='/api/perfis-atividades')
     app.register_blueprint(rotinas_bp, url_prefix='/api/rotinas')
     app.register_blueprint(notificacoes_bp, url_prefix='/api/notificacoes')
 
@@ -80,6 +83,7 @@ def create_app():
     @app.route('/regionais')
     @app.route('/empreendimentos')
     @app.route('/atividades')
+    @app.route('/perfis')
     @app.route('/rotinas')
     @app.route('/acompanhamento')
     @app.route('/pendencias')
@@ -137,13 +141,46 @@ def create_app():
     # Init DB and seed
     with app.app_context():
         os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-        db.create_all()
-        _ensure_runtime_columns()
-        reconciliar_semanas_mes_atual()
-        _seed_initial_data()
-        _seed_empreendimentos()
+        with _init_lock():
+            db.create_all()
+            _ensure_runtime_columns()
+            reconciliar_semanas_mes_atual()
+            _seed_initial_data()
+            _seed_empreendimentos()
+            _seed_perfil_atividades()
 
     return app
+
+
+@contextmanager
+def _init_lock():
+    """Serializa a inicialização/seed do banco entre os workers do gunicorn.
+
+    `gunicorn --workers 2` sobe os workers em paralelo e cada um roda
+    create_all() + os _sync_* + seeds. Sem trava, dois workers rodando ao mesmo
+    tempo colidem (ex.: `duplicate key ... pg_type` no create_all, ou linhas de
+    catálogo duplicadas quando dois workers criam a mesma atividade antes de o
+    outro commitar). Um advisory lock do Postgres faz o segundo worker esperar
+    o primeiro terminar; quando ele assume, tudo já está feito e os _sync_*
+    (idempotentes) não mexem em nada.
+
+    Em SQLite (testes) não há advisory lock — e também não há concorrência de
+    workers —, então é um no-op."""
+    engine = db.engine
+    if engine.dialect.name != 'postgresql':
+        yield
+        return
+    # Chave arbitrária porém estável para esta aplicação.
+    chave = 728192463
+    conn = engine.connect()
+    try:
+        conn.exec_driver_sql(f'SELECT pg_advisory_lock({chave})')
+        try:
+            yield
+        finally:
+            conn.exec_driver_sql(f'SELECT pg_advisory_unlock({chave})')
+    finally:
+        conn.close()
 
 
 def _seed_empreendimentos():
@@ -162,6 +199,93 @@ def _seed_empreendimentos():
     if criados:
         db.session.commit()
         print(f"[seed] {criados} empreendimentos cadastrados.")
+
+
+# Config inicial de PerfilAtividade (ver backend.models.PerfilAtividade e
+# backend.constants.PERFIS_TIPO) — equivalente ao comportamento histórico
+# antes da tela de admin "Perfis": perfil único recebia todo o catálogo do seu
+# `AtividadeCatalogo.perfil`; as combinações (perfis híbridos) recebiam a
+# lista curada que vivia em backend.constants.ATIVIDADES_PERFIL_HIBRIDO. Serve
+# só de ponto de partida — a partir daqui a tela de Perfis é a fonte da
+# verdade, e o admin pode alterar livremente.
+_ATIVIDADES_HIBRIDO_SEED = {
+    'cd+gv': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Monitoramento de Rotinas da Equipe',
+        'Análise do Resultado Geral do Time',
+    ],
+    'gv+sp': [
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Monitoramento de Rotinas da Equipe',
+        'Análise do Resultado Geral do Time',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+    'cd+sp': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Relatório Mensal do Empreendimento',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+    'cd+gv+sp': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Análise do Resultado Geral do Time',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+}
+
+
+def _seed_perfil_atividades():
+    """Carga inicial (uma única vez) da configuração de PerfilAtividade. Só
+    roda se a tabela estiver completamente vazia — depois da 1ª vez, é 100%
+    administrável pela tela de Perfis e este seed nunca mais toca nela."""
+    from backend.models import AtividadeCatalogo, PerfilAtividade
+
+    if PerfilAtividade.query.first() is not None:
+        return
+
+    criadas = 0
+    for perfil_base in ('gv', 'cd', 'sp', 'sr'):
+        ids = [a.id for a in AtividadeCatalogo.query.filter_by(perfil=perfil_base, ativo=True).all()]
+        for aid in ids:
+            db.session.add(PerfilAtividade(perfil_tipo=perfil_base, atividade_id=aid))
+            criadas += 1
+
+    for tipo, nomes in _ATIVIDADES_HIBRIDO_SEED.items():
+        perfis_base = tipo.split('+')
+        atividades = AtividadeCatalogo.query.filter(
+            AtividadeCatalogo.perfil.in_(perfis_base),
+            AtividadeCatalogo.nome.in_(nomes),
+            AtividadeCatalogo.ativo == True
+        ).all()
+        for a in atividades:
+            db.session.add(PerfilAtividade(perfil_tipo=tipo, atividade_id=a.id))
+            criadas += 1
+
+    if criadas:
+        db.session.commit()
+        print(f"[seed] {criadas} atribuições iniciais de perfil x atividade cadastradas.")
 
 
 def _seed_initial_data():
@@ -322,6 +446,97 @@ def _sync_atividades_parcerias():
         print("[sync] Catalogo de parcerias alinhado aos 5 relatorios personalizados.")
 
 
+def _sync_atividades_gv_cd():
+    """Garante o catálogo de Gerente de Vendas (gv) e Coordenador de Produto (cd)
+    a partir do seed e alinha a nomenclatura à revisão de perfis híbridos.
+
+    - Renomeia registros antigos para o nome canônico (via `aliases`), sem criar
+      duplicata — mesmo padrão de _sync_atividades_parcerias / _superintendentes.
+    - Cria as atividades do seed que ainda não existirem (ex.: banco novo).
+    - NÃO desativa atividades "extras": gv/cd podem ter atividades criadas
+      manualmente pelo admin, que devem ser preservadas.
+    """
+    from backend.seed_data import ATIVIDADES_CATALOGO
+    from backend.models import AtividadeCatalogo
+
+    # nome canônico -> nomes anteriores que devem ser renomeados para ele
+    aliases = {
+        'Reunião de Performance com Corretores': ['Reunião Coletiva com Corretores'],
+        'Alinhamento individual com Corretores (1:1)': ['1:1 com Corretores'],
+        'Monitoramento de Rotinas da Equipe': ['Checagem de Disciplina Operacional'],
+        'Análise do Resultado Geral do Time': ['Revisão Mensal de Performance do Time'],
+        'Análise de Concorrência': ['1-Pager de Concorrência'],
+    }
+    seeds = [s for s in ATIVIDADES_CATALOGO if s.get('perfil') in ('gv', 'cd')]
+    alteradas = 0
+
+    for seed in seeds:
+        nomes_busca = [seed['nome'], *aliases.get(seed['nome'], [])]
+        atividade = (
+            AtividadeCatalogo.query
+            .filter(AtividadeCatalogo.perfil == seed['perfil'], AtividadeCatalogo.nome.in_(nomes_busca))
+            .order_by(AtividadeCatalogo.ativo.desc(), AtividadeCatalogo.id.asc())
+            .first()
+        )
+
+        if not atividade:
+            atividade = AtividadeCatalogo()
+            db.session.add(atividade)
+            alteradas += 1
+
+        # Só o `nome` é forçado para o canônico (renomeação). Periodicidade,
+        # obrigatoriedade e demais campos do catálogo permanecem como estão no
+        # banco quando a atividade já existe — mudanças de periodicidade/
+        # obrigatoriedade são decisão à parte (ver documento de revisão).
+        campos = ['nome', 'descricao', 'periodicidade', 'perfil', 'obrigatoria',
+                  'tipo_evidencia', 'indicador', 'prazo_padrao', 'ordem']
+        nova = atividade.id is None
+        for campo in campos:
+            if not nova and campo != 'nome':
+                continue
+            valor = seed.get(campo)
+            if getattr(atividade, campo, None) != valor:
+                setattr(atividade, campo, valor)
+                alteradas += 1
+        if not atividade.ativo:
+            atividade.ativo = True
+            alteradas += 1
+
+    if alteradas:
+        db.session.commit()
+        print("[sync] Catalogo de GV/CD alinhado (revisao de perfis hibridos).")
+
+    _dedup_catalogo(('gv', 'cd'))
+
+
+def _dedup_catalogo(perfis):
+    """Remove linhas duplicadas (mesmo perfil+nome) do catálogo — cicatriz de
+    uma eventual corrida de inicialização entre workers antes do _init_lock.
+    Mantém a de menor id e só remove duplicata sem nenhuma rotina vinculada,
+    para nunca perder histórico. Idempotente."""
+    from backend.models import AtividadeCatalogo, Rotina
+
+    linhas = (
+        AtividadeCatalogo.query
+        .filter(AtividadeCatalogo.perfil.in_(tuple(perfis)))
+        .order_by(AtividadeCatalogo.perfil, AtividadeCatalogo.nome, AtividadeCatalogo.id)
+        .all()
+    )
+    vistos = set()
+    removidas = 0
+    for a in linhas:
+        chave = (a.perfil, a.nome)
+        if chave not in vistos:
+            vistos.add(chave)
+            continue
+        if not Rotina.query.filter_by(atividade_id=a.id).first():
+            db.session.delete(a)
+            removidas += 1
+    if removidas:
+        db.session.commit()
+        print(f"[sync] {removidas} atividades duplicadas removidas do catalogo.")
+
+
 def _ensure_runtime_columns():
     insp = inspect(db.engine)
     tabelas = set(insp.get_table_names())
@@ -378,6 +593,7 @@ def _ensure_runtime_columns():
     _sync_descricoes_catalogo()
     _sync_atividades_superintendentes()
     _sync_atividades_parcerias()
+    _sync_atividades_gv_cd()
 
     # Catálogo de atividades
 

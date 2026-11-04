@@ -13,9 +13,10 @@ from backend.routes.usuarios import usuarios_bp
 from backend.routes.regionais import regionais_bp
 from backend.routes.empreendimentos import empreendimentos_bp
 from backend.routes.atividades import atividades_bp
+from backend.routes.perfis_atividades import perfis_atividades_bp
 from backend.routes.rotinas import rotinas_bp
 from backend.routes.notificacoes import notificacoes_bp
-from backend.models import Usuario, Regional, AtividadeCatalogo, Rotina
+from backend.models import Usuario, Regional, AtividadeCatalogo, Rotina, PerfilAtividade
 
 
 @pytest.fixture()
@@ -38,6 +39,7 @@ def app():
     flask_app.register_blueprint(regionais_bp, url_prefix='/api/regionais')
     flask_app.register_blueprint(empreendimentos_bp, url_prefix='/api/empreendimentos')
     flask_app.register_blueprint(atividades_bp, url_prefix='/api/atividades')
+    flask_app.register_blueprint(perfis_atividades_bp, url_prefix='/api/perfis-atividades')
     flask_app.register_blueprint(rotinas_bp, url_prefix='/api/rotinas')
     flask_app.register_blueprint(notificacoes_bp, url_prefix='/api/notificacoes')
 
@@ -80,7 +82,23 @@ class Factory:
         )
         db.session.add(a)
         db.session.commit()
+        # Toda atividade nasce atribuída ao seu próprio perfil-tipo (perfil
+        # único) em PerfilAtividade — equivalente ao comportamento histórico
+        # de "perfil único recebe todo o catálogo do seu perfil".
+        db.session.add(PerfilAtividade(perfil_tipo=perfil, atividade_id=a.id))
+        db.session.commit()
         return a
+
+    def perfil_atividade(self, tipo, atividades):
+        """Atribui uma lista de AtividadeCatalogo (ou nomes já existentes no
+        catálogo) a um tipo de perfil combinado (ex.: 'cd+gv'), simulando a
+        configuração feita pelo admin na tela de Perfis."""
+        for item in atividades:
+            a = item if isinstance(item, AtividadeCatalogo) else AtividadeCatalogo.query.filter_by(nome=item).first()
+            if a is None:
+                continue
+            db.session.add(PerfilAtividade(perfil_tipo=tipo, atividade_id=a.id))
+        db.session.commit()
 
     def rotina(self, usuario, atividade, periodo_inicio, periodo_fim, periodicidade=None, status='nao_iniciada'):
         r = Rotina(

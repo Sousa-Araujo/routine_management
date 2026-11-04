@@ -159,6 +159,22 @@ class AtividadeCatalogo(db.Model):
         }
 
 
+class PerfilAtividade(db.Model):
+    """Associa atividades do catálogo a um 'tipo de perfil' (perfil único ou
+    combinação de perfis acumulados — ver backend.constants.PERFIS_TIPO e
+    perfil_tipo_key). É a fonte da verdade de quais atividades cada tipo de
+    perfil recebe, configurável pelo admin na tela de Perfis."""
+    __tablename__ = 'perfil_atividades'
+    __table_args__ = (
+        db.UniqueConstraint('perfil_tipo', 'atividade_id', name='uq_perfil_atividade'),
+    )
+    id = db.Column(db.Integer, primary_key=True)
+    perfil_tipo = db.Column(db.String(30), nullable=False)
+    atividade_id = db.Column(db.Integer, db.ForeignKey('atividades_catalogo.id'), nullable=False)
+    criado_em = db.Column(db.DateTime, default=get_now_br)
+    atividade = db.relationship('AtividadeCatalogo', lazy=True)
+
+
 class Rotina(db.Model):
     __tablename__ = 'rotinas'
     id = db.Column(db.Integer, primary_key=True)
