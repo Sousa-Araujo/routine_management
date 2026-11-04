@@ -12,6 +12,7 @@ import UsuariosPage from './pages/UsuariosPage';
 import RegionaisPage from './pages/RegionaisPage';
 import EmpreendimentosPage from './pages/EmpreendimentosPage';
 import AtividadesPage from './pages/AtividadesPage';
+import PerfisPage from './pages/PerfisPage';
 import AuditoriaPage from './pages/AuditoriaPage';
 import MetricasAprovacaoPage from './pages/MetricasAprovacaoPage';
 import RelatoriosPreenchimentoPage from './pages/RelatoriosPreenchimentoPage';
@@ -29,6 +30,7 @@ const PAGES = {
   regionais:            RegionaisPage,
   empreendimentos:      EmpreendimentosPage,
   atividades:           AtividadesPage,
+  perfis:               PerfisPage,
   perfil:               MeuPerfil,
   auditoria:            AuditoriaPage,
   metricas_aprovacao:   MetricasAprovacaoPage,
@@ -46,6 +48,7 @@ const PAGE_ROLES = {
   regionais:            ['admin'],
   empreendimentos:      ['admin'],
   atividades:           ['admin'],
+  perfis:               ['admin'],
   auditoria:            ['admin'],
   metricas_aprovacao:   ['admin'],
   relatorios:           ['admin'],

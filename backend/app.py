@@ -10,6 +10,7 @@ from backend.routes.usuarios import usuarios_bp
 from backend.routes.regionais import regionais_bp
 from backend.routes.empreendimentos import empreendimentos_bp
 from backend.routes.atividades import atividades_bp
+from backend.routes.perfis_atividades import perfis_atividades_bp
 from backend.routes.rotinas import rotinas_bp, reconciliar_semanas_mes_atual
 from backend.routes.notificacoes import notificacoes_bp
 
@@ -71,6 +72,7 @@ def create_app():
     app.register_blueprint(regionais_bp, url_prefix='/api/regionais')
     app.register_blueprint(empreendimentos_bp, url_prefix='/api/empreendimentos')
     app.register_blueprint(atividades_bp, url_prefix='/api/atividades')
+    app.register_blueprint(perfis_atividades_bp, url_prefix='/api/perfis-atividades')
     app.register_blueprint(rotinas_bp, url_prefix='/api/rotinas')
     app.register_blueprint(notificacoes_bp, url_prefix='/api/notificacoes')
 
@@ -81,6 +83,7 @@ def create_app():
     @app.route('/regionais')
     @app.route('/empreendimentos')
     @app.route('/atividades')
+    @app.route('/perfis')
     @app.route('/rotinas')
     @app.route('/acompanhamento')
     @app.route('/pendencias')
@@ -144,6 +147,7 @@ def create_app():
             reconciliar_semanas_mes_atual()
             _seed_initial_data()
             _seed_empreendimentos()
+            _seed_perfil_atividades()
 
     return app
 
@@ -195,6 +199,93 @@ def _seed_empreendimentos():
     if criados:
         db.session.commit()
         print(f"[seed] {criados} empreendimentos cadastrados.")
+
+
+# Config inicial de PerfilAtividade (ver backend.models.PerfilAtividade e
+# backend.constants.PERFIS_TIPO) — equivalente ao comportamento histórico
+# antes da tela de admin "Perfis": perfil único recebia todo o catálogo do seu
+# `AtividadeCatalogo.perfil`; as combinações (perfis híbridos) recebiam a
+# lista curada que vivia em backend.constants.ATIVIDADES_PERFIL_HIBRIDO. Serve
+# só de ponto de partida — a partir daqui a tela de Perfis é a fonte da
+# verdade, e o admin pode alterar livremente.
+_ATIVIDADES_HIBRIDO_SEED = {
+    'cd+gv': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Monitoramento de Rotinas da Equipe',
+        'Análise do Resultado Geral do Time',
+    ],
+    'gv+sp': [
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Monitoramento de Rotinas da Equipe',
+        'Análise do Resultado Geral do Time',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+    'cd+sp': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Relatório Mensal do Empreendimento',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+    'cd+gv+sp': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Análise do Resultado Geral do Time',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+}
+
+
+def _seed_perfil_atividades():
+    """Carga inicial (uma única vez) da configuração de PerfilAtividade. Só
+    roda se a tabela estiver completamente vazia — depois da 1ª vez, é 100%
+    administrável pela tela de Perfis e este seed nunca mais toca nela."""
+    from backend.models import AtividadeCatalogo, PerfilAtividade
+
+    if PerfilAtividade.query.first() is not None:
+        return
+
+    criadas = 0
+    for perfil_base in ('gv', 'cd', 'sp', 'sr'):
+        ids = [a.id for a in AtividadeCatalogo.query.filter_by(perfil=perfil_base, ativo=True).all()]
+        for aid in ids:
+            db.session.add(PerfilAtividade(perfil_tipo=perfil_base, atividade_id=aid))
+            criadas += 1
+
+    for tipo, nomes in _ATIVIDADES_HIBRIDO_SEED.items():
+        perfis_base = tipo.split('+')
+        atividades = AtividadeCatalogo.query.filter(
+            AtividadeCatalogo.perfil.in_(perfis_base),
+            AtividadeCatalogo.nome.in_(nomes),
+            AtividadeCatalogo.ativo == True
+        ).all()
+        for a in atividades:
+            db.session.add(PerfilAtividade(perfil_tipo=tipo, atividade_id=a.id))
+            criadas += 1
+
+    if criadas:
+        db.session.commit()
+        print(f"[seed] {criadas} atribuições iniciais de perfil x atividade cadastradas.")
 
 
 def _seed_initial_data():

@@ -98,10 +98,64 @@ CATALOGO_SP = [
 ]
 
 
+# Listas curadas para cada combinação de perfis acumulados — mesmos dados que
+# viviam em backend.constants.ATIVIDADES_PERFIL_HIBRIDO antes da tela de admin
+# "Perfis" existir; aqui simulam a configuração que o admin faria via
+# PUT /api/perfis-atividades/<tipo>.
+ATIVIDADES_HIBRIDO = {
+    'cd+gv': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Monitoramento de Rotinas da Equipe',
+        'Análise do Resultado Geral do Time',
+    ],
+    'gv+sp': [
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Monitoramento de Rotinas da Equipe',
+        'Análise do Resultado Geral do Time',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+    'cd+sp': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Relatório Mensal do Empreendimento',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+    'cd+gv+sp': [
+        'Checklist de Abertura do Stand',
+        'Relatório Geral do Empreendimento',
+        'Análise de Concorrência',
+        'Reunião de Performance com Corretores',
+        'Alinhamento individual com Corretores (1:1)',
+        'Treinamento Semanal do Time',
+        'Análise do Resultado Geral do Time',
+        'Relatório do Canal Parcerias',
+        'Rotina de Visita a Parceiros',
+        'Análise da Carteira de Parceiros',
+        'Treinamento e Alinhamento com Parceiros',
+    ],
+}
+
+
 def _semear_catalogo_completo(factory):
     for perfil, catalogo in (('gv', CATALOGO_GV), ('cd', CATALOGO_CD), ('sp', CATALOGO_SP)):
         for nome, periodicidade in catalogo:
             factory.atividade(nome, periodicidade, perfil)
+    for tipo, nomes in ATIVIDADES_HIBRIDO.items():
+        factory.perfil_atividade(tipo, nomes)
 
 
 def _usuario_hibrido(factory, perfis, regional_id):

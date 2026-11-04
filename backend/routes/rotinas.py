@@ -8,8 +8,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 from backend.audit import log_audit
 from backend.utils.dates import get_now_br, hoje_br
-from backend.models import Rotina, AtividadeCatalogo, Usuario, HistoricoRotina, Evidencia, AuditLog, FechamentoPeriodo, Notificacao, GRACE_DAYS_BY_PERIODICIDADE, GRACE_DAYS_REENVIO
-from backend.constants import atividade_requer_aprovacao, nomes_atividades_perfil_hibrido
+from backend.models import Rotina, AtividadeCatalogo, Usuario, HistoricoRotina, Evidencia, AuditLog, FechamentoPeriodo, Notificacao, PerfilAtividade, GRACE_DAYS_BY_PERIODICIDADE, GRACE_DAYS_REENVIO
+from backend.constants import atividade_requer_aprovacao, perfil_tipo_key
 from backend.extensions import db
 from datetime import date, timedelta, datetime, timezone
 from dateutil.relativedelta import relativedelta
@@ -511,24 +511,22 @@ def marcar_vencidas_nao_realizadas(rotinas, ator_id=None):
 
 
 def catalogo_do_usuario(usuario, periodicidade_filtro=None):
-    """Atividades do catálogo que valem para o usuário.
-
-    - Função ÚNICA (0 ou 1 perfil combinável): todas as atividades ativas dos
-      perfis do usuário — comportamento histórico.
-    - Função ACUMULADA (2+ perfis combináveis): apenas a lista curada de
-      ATIVIDADES_PERFIL_HIBRIDO (ver backend/constants.py). A lista não é a
-      união dos catálogos.
-
-    Filtra sempre por `perfil in perfis_list` — assim, mesmo em combinação, só
-    entram atividades que de fato pertencem a algum perfil do usuário; a lista
-    curada apenas restringe ainda mais, por nome."""
+    """Atividades do catálogo que valem para o usuário, de acordo com a
+    configuração de PerfilAtividade para o "tipo de perfil" dele (perfil
+    único ou combinação acumulada — ver perfil_tipo_key em backend/constants.py).
+    Essa configuração é 100% administrável na tela de Perfis; usuário sem tipo
+    (ex.: admin) ou tipo ainda sem nenhuma atividade marcada não gera rotina
+    nenhuma."""
+    tipo = perfil_tipo_key(usuario.perfis_list)
+    if not tipo:
+        return []
+    ids = [pa.atividade_id for pa in PerfilAtividade.query.filter_by(perfil_tipo=tipo).all()]
+    if not ids:
+        return []
     query = AtividadeCatalogo.query.filter(
-        AtividadeCatalogo.perfil.in_(usuario.perfis_list),
+        AtividadeCatalogo.id.in_(ids),
         AtividadeCatalogo.ativo == True
     )
-    nomes_hibrido = nomes_atividades_perfil_hibrido(usuario.perfis_list)
-    if nomes_hibrido is not None:
-        query = query.filter(AtividadeCatalogo.nome.in_(nomes_hibrido))
     if periodicidade_filtro and periodicidade_filtro != 'todas':
         query = query.filter(AtividadeCatalogo.periodicidade == periodicidade_filtro)
     return query.all()
